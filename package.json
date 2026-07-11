@@ -1,7 +1,7 @@
 {
   "name": "@zosmaai/gsccli",
-  "version": "1.2.1",
-  "description": "Full-featured Google Search Console + Indexing API CLI \u2014 auto-paginated Search Analytics, period comparison, batch URL inspection, client-side sort, query cache, OAuth/SA auth, MCP server.",
+  "version": "1.2.2",
+  "description": "Full-featured Google Search Console + Indexing API CLI — auto-paginated Search Analytics, period comparison, batch URL inspection, client-side sort, query cache, OAuth/SA auth, MCP server.",
   "type": "module",
   "main": "dist/index.js",
   "bin": {
@@ -30,7 +30,7 @@
     "model-context-protocol"
   ],
   "license": "MIT",
-  "author": "Ion (Nalyk) Calm\u00ee\u0219 <dev.ungheni@gmail.com>",
+  "author": "Ion (Nalyk) Calmîș <dev.ungheni@gmail.com>",
   "homepage": "https://opensource.yoda.digital/en/projects/gsccli/",
   "repository": {
     "type": "git",
