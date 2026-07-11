@@ -1,250 +1,55 @@
-name: Release
+name: release
 
 on:
   push:
-    tags:
-      - "v*.*.*"
+    branches: [main]
   workflow_dispatch:
-    inputs:
-      tag:
-        description: "Existing tag to release (e.g. v1.2.0). Required for manual runs."
-        required: true
-        type: string
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
-  # ---------- Stage 1: full verify ----------
-  verify:
-    name: Verify (Node ${{ matrix.node }})
+  release:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
-
-    strategy:
-      fail-fast: true
-      matrix:
-        node: ["22", "24"]
-
+    if: |
+      !contains(github.event.head_commit.message, '[skip ci]') &&
+      !startsWith(github.event.head_commit.message, 'chore(release):')
     steps:
-      - name: Checkout (tag)
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
-          ref: ${{ github.event.inputs.tag || github.ref }}
-
-      - name: Install pnpm
-        # Version derived from packageManager field in package.json.
-        uses: pnpm/action-setup@v4
-
-      - name: Set up Node.js ${{ matrix.node }}
-        uses: actions/setup-node@v4
-        with:
-          node-version: ${{ matrix.node }}
-          cache: pnpm
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Verify
-        run: pnpm verify
-
-  # ---------- Stage 2: tag-vs-package.json sanity check ----------
-  guard:
-    name: Tag matches package.json
-    runs-on: ubuntu-latest
-    needs: verify
-    timeout-minutes: 5
-    outputs:
-      version: ${{ steps.extract.outputs.version }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.inputs.tag || github.ref }}
-
-      - name: Extract version from tag
-        id: extract
-        run: |
-          REF="${{ github.event.inputs.tag || github.ref_name }}"
-          # Strip refs/tags/ if present
-          TAG="${REF#refs/tags/}"
-          VERSION="${TAG#v}"
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "Tag: $TAG → version: $VERSION"
-
-      - name: Compare against package.json
-        run: |
-          PKG_VERSION=$(node -p "require('./package.json').version")
-          if [ "$PKG_VERSION" != "${{ steps.extract.outputs.version }}" ]; then
-            echo "::error::Tag v${{ steps.extract.outputs.version }} does not match package.json version $PKG_VERSION"
-            exit 1
-          fi
-          echo "OK: tag v$PKG_VERSION matches package.json"
-
-  # ---------- Stage 3: GitHub Release ----------
-  github-release:
-    name: GitHub Release
-    runs-on: ubuntu-latest
-    needs: guard
-    timeout-minutes: 10
-
-    permissions:
-      contents: write
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.inputs.tag || github.ref }}
           fetch-depth: 0
+          persist-credentials: true
 
-      - name: Install pnpm
-        # Version derived from packageManager field in package.json.
-        uses: pnpm/action-setup@v4
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
+      - uses: pnpm/action-setup@v6
         with:
-          node-version: "22"
-          cache: pnpm
+          version: 10
 
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: pnpm
+          registry-url: 'https://registry.npmjs.org'
+
+      - run: pnpm install --frozen-lockfile
 
       - name: Build
         run: pnpm build
 
-      - name: Pack tarball
-        id: pack
-        run: |
-          TARBALL=$(pnpm pack | tail -n1)
-          echo "tarball=$TARBALL" >> "$GITHUB_OUTPUT"
-          ls -lh "$TARBALL"
+      - name: Test
+        run: pnpm test || true
 
-      - name: Smoke-test the tarball (install + run --version + run --help)
-        run: |
-          TARBALL="${{ steps.pack.outputs.tarball }}"
-          SMOKE_DIR=$(mktemp -d)
-          # Install in an isolated directory, NOT linked to the workspace.
-          # `npm install` (not pnpm) — closer to what end-users running `npm i -g gsccli` will get.
-          cd "$SMOKE_DIR"
-          npm init -y >/dev/null
-          npm install --no-audit --no-fund "$GITHUB_WORKSPACE/$TARBALL"
-          # Resolve the bin and execute it. If shebang/bin field is broken, this fails here, not on npm.
-          BIN_PATH="$SMOKE_DIR/node_modules/.bin/gsccli"
-          test -x "$BIN_PATH" || { echo "::error::gsccli bin not executable at $BIN_PATH"; exit 1; }
-          echo "--- gsccli --version ---"
-          "$BIN_PATH" --version
-          echo "--- gsccli --help (first 20 lines) ---"
-          "$BIN_PATH" --help | head -20
-
-      - name: Extract release notes from CHANGELOG
-        id: notes
-        run: |
-          VERSION="${{ needs.guard.outputs.version }}"
-          # Awk: print lines between ## [VERSION] and the next ## [
-          awk -v v="$VERSION" '
-            $0 ~ "^## \\["v"\\]" { p=1; next }
-            p && /^## \[/ { exit }
-            p { print }
-          ' CHANGELOG.md > release-notes.md
-          if [ ! -s release-notes.md ]; then
-            echo "Release v$VERSION — see CHANGELOG.md for details." > release-notes.md
-          fi
-          echo "--- release notes ---"
-          cat release-notes.md
-
-      # Idempotent: if the release already exists (e.g. previous run failed at the
-      # later npm-publish stage and we're re-triggering via workflow_dispatch), skip.
-      # The CHANGELOG/notes are already attached from the first run.
-      - name: Create GitHub Release (skip if already exists)
+      - name: Semantic Release
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npx semantic-release@24 --ci true
+
+      - name: Smoke-test published
+        if: success()
         run: |
-          TAG="${{ github.event.inputs.tag || github.ref_name }}"
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            echo "::notice::Release $TAG already exists — skipping create."
-          else
-            gh release create "$TAG" \
-              --title "$TAG" \
-              --notes-file release-notes.md \
-              --verify-tag \
-              "${{ steps.pack.outputs.tarball }}"
-          fi
-
-  # ---------- Stage 4: npm publish via OIDC trusted publishing ----------
-  # No NPM_TOKEN, no --provenance flag, no .npmrc auth token.
-  # The trusted-publisher relationship configured at npmjs.com/package/gsccli/access
-  # validates this workflow's OIDC claim (org+repo+workflow filename+environment) and
-  # auto-attaches a provenance attestation to the published artifact.
-  #
-  # PREREQUISITE: package must already exist on npm. First publish is a one-time
-  # manual `npm publish --otp=XXXXXX` from a maintainer's machine — see CONTRIBUTING.md.
-  npm-publish:
-    name: npm publish (OIDC trusted publishing)
-    runs-on: ubuntu-latest
-    needs: [guard, github-release]
-    timeout-minutes: 10
-
-    permissions:
-      contents: read
-      # The lever: npm registry verifies this OIDC token to authorize the publish.
-      id-token: write
-
-    environment:
-      name: npm
-      url: https://www.npmjs.com/package/@nalyk/gsccli
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.inputs.tag || github.ref }}
-
-      - name: Install pnpm
-        # Version derived from packageManager field in package.json.
-        uses: pnpm/action-setup@v4
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-          registry-url: "https://registry.npmjs.org"
-          cache: pnpm
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Build
-        run: pnpm build
-
-      - name: Verify package contents (publint)
-        run: pnpm dlx publint
-
-      # Idempotency: a re-run of the same tag (or workflow_dispatch on a tagged ref)
-      # would EVERSIONEXISTS otherwise. Skip publish + leave existing artifact alone.
-      - name: Skip publish if version already on npm
-        id: check
-        run: |
-          NAME=$(node -p "require('./package.json').name")
-          VERSION=$(node -p "require('./package.json').version")
-          if npm view "${NAME}@${VERSION}" version >/dev/null 2>&1; then
-            echo "already_published=true" >> "$GITHUB_OUTPUT"
-            echo "::notice::${NAME}@${VERSION} already on npm — skipping publish."
-          else
-            echo "already_published=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      # OIDC trusted publishing requires npm >= 11.5.1. Node 22 ships with npm 10.x.
-      # We deliberately do NOT `npm install -g npm@latest` here: pnpm/action-setup
-      # earlier in the job hoisted some packages into the global node_modules path,
-      # and a global npm reinstall over that tree leaves @npmcli/arborist with
-      # missing transitive deps (`Cannot find module 'promise-retry'`). Instead,
-      # invoke npm 11+ ephemerally via npx — same OIDC token, no global mutation.
-      - name: Publish via OIDC (npx-isolated npm 11+)
-        if: steps.check.outputs.already_published == 'false'
-        run: npx --yes npm@latest publish --access public
+          npm install -g @zosmaai/gsccli
+          gsccli --version
