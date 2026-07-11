@@ -30,16 +30,14 @@
     "model-context-protocol"
   ],
   "license": "MIT",
-  "author": "Ion (Nalyk) Calmîș <dev.ungheni@gmail.com>",
-  "homepage": "https://opensource.yoda.digital/en/projects/gsccli/",
+  "homepage": "https://github.com/zosmaai/gsccli",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/zosmaai/gsccli.git"
   },
   "bugs": {
-    "url": "https://github.com/nalyk/gsccli/issues"
+    "url": "https://github.com/zosmaai/gsccli/issues"
   },
-  "funding": "https://github.com/sponsors/nalyk",
   "publishConfig": {
     "access": "public",
     "registry": "https://registry.npmjs.org/"
@@ -83,5 +81,6 @@
     "node": ">=22.0.0",
     "pnpm": ">=10"
   },
-  "packageManager": "pnpm@10.29.3"
+  "packageManager": "pnpm@10.29.3",
+  "author": "Zosma AI <team@zosma.ai>"
 }
